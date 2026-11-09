@@ -80,7 +80,10 @@ export function mountBar(s) {
   const bar = $("#bar");
   bar.replaceChildren(
     h("a", { class: "brand", href: "index.html", text: "Exam Portal" }),
-    s ? h("div", { class: "who" }, s.email,
+    s ? h("div", { class: "who" },
+      s.role === "teacher" ? h("a", { href: "teacher_dashboard.html", text: "Create exam" }) : null,
+      s.role === "teacher" ? h("a", { href: "teacher_results.html", text: "Results" }) : null,
+      h("span", { text: s.email }),
       h("button", { class: "btn link", type: "button", text: "Log out", onclick: () => { session.clear(); location.href = "index.html"; } }))
       : null);
 }

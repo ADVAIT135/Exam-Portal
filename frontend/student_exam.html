@@ -12,7 +12,18 @@
 <h1 id="title">Exam</h1>
 <p class="summary" id="summary" aria-live="polite"></p>
 <div id="msg" class="msg" role="status" aria-live="polite"></div>
-<form id="form">
+<section class="card" id="exam-picker">
+  <h2>Choose an exam</h2>
+  <form id="exam-picker-form">
+    <div class="field">
+      <label for="exam-select">Subject and module</label>
+      <select id="exam-select" required></select>
+    </div>
+    <button class="btn primary" id="open-exam" type="submit">Open exam</button>
+  </form>
+</section>
+<button class="btn link" id="choose-exam" type="button" hidden>Choose a different exam</button>
+<form id="form" hidden>
   <div id="questions"></div>
   <div class="row end" id="actions" hidden><button class="btn primary" id="submit" type="submit">Submit answers</button></div>
 </form>

@@ -23,6 +23,13 @@ def client(monkeypatch):
             return FakeResp({"status": "error", "message": "Invalid credentials"})
         if ep == "getQuestions":
             return FakeResp({"status": "ok", "questions": QUESTIONS})
+        if ep == "getExams":
+            return FakeResp({"status": "ok", "exams": [
+                {"examID": "exam-1", "subjectName": "Science", "moduleName": "Plants",
+                 "questionCount": 2, "totalMarks": 10, "createdAt": "2026-01-01T10:00:00Z"}
+            ]})
+        if ep == "postQuestions":
+            return FakeResp({"status": "ok", "examID": "exam-2"})
         return FakeResp({"status": "ok"})
     monkeypatch.setattr(A.requests, "post", fake_post)
     monkeypatch.setattr(A, "score_answers", lambda pairs: [round(p[2] / 2, 2) for p in pairs])
@@ -55,14 +62,14 @@ def test_auth_required_and_roles_enforced(client):
 
 
 def test_students_never_receive_reference_answers(client):
-    r = client.get("/api/questions", headers=login(client, "student"))
+    r = client.get("/api/questions?exam_id=exam-1", headers=login(client, "student"))
     assert "SECRET-REF" not in r.get_data(as_text=True) and "desiredAnswer" not in r.get_data(as_text=True)
     assert [q["questionID"] for q in r.get_json()["questions"]] == ["1", "2"]
 
 
 def test_submit_scores_on_server_and_ignores_client_scores(client):
     h = login(client, "student")
-    r = client.post("/api/submit", headers=h, json={"answers": [
+    r = client.post("/api/submit", headers=h, json={"examID": "exam-1", "answers": [
         {"questionID": "1", "answer": "mine", "score": 999}, {"questionID": "2", "answer": ""}]})
     d = r.get_json()
     assert r.status_code == 200 and d["total"] == 5.0 and d["max"] == 10.0
@@ -74,8 +81,9 @@ def test_submit_scores_on_server_and_ignores_client_scores(client):
 
 def test_second_submit_with_same_login_is_rejected(client):
     h = login(client, "student")
-    assert client.post("/api/submit", headers=h, json={"answers": []}).status_code == 200
-    assert client.post("/api/submit", headers=h, json={"answers": []}).status_code == 409
+    assert client.post("/api/submit", headers=h, json={"examID": "exam-1", "answers": []}).status_code == 200
+    assert client.post("/api/submit", headers=h, json={"examID": "exam-1", "answers": []}).status_code == 409
+    assert client.post("/api/submit", headers=h, json={"examID": "exam-2", "answers": []}).status_code == 200
 
 
 def test_failed_submit_can_be_retried(client, monkeypatch):
@@ -83,9 +91,9 @@ def test_failed_submit_can_be_retried(client, monkeypatch):
     monkeypatch.setattr(A, "score_answers", lambda p: (_ for _ in ()).throw(ApiErr()))
     class ApiErr(A.ApiError):
         def __init__(self): super().__init__("boom", 500)
-    assert client.post("/api/submit", headers=h, json={"answers": []}).status_code == 500
+    assert client.post("/api/submit", headers=h, json={"examID": "exam-1", "answers": []}).status_code == 500
     monkeypatch.setattr(A, "score_answers", lambda p: [0.0] * len(p))
-    assert client.post("/api/submit", headers=h, json={"answers": []}).status_code == 200
+    assert client.post("/api/submit", headers=h, json={"examID": "exam-1", "answers": []}).status_code == 200
 
 
 @pytest.mark.parametrize("q", [

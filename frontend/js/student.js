@@ -4,27 +4,82 @@ const s = requireRole("student");
 if (s) {
   mountBar(s);
   const msg = $("#msg"), form = $("#form"), box = $("#questions"), summary = $("#summary"), dlg = $("#confirm");
-  let questions = [];
+  const picker = $("#exam-picker"), pickerForm = $("#exam-picker-form"), examSelect = $("#exam-select");
+  const chooseExam = $("#choose-exam");
+  let exams = [], questions = [], activeExam = null;
 
   (async () => {
-    box.replaceChildren(h("div", { class: "skeleton" }));
     try {
-      questions = (await api("/api/questions")).questions;
-    } catch (err) { box.replaceChildren(); say(msg, err.message, "error"); return; }
+      exams = (await api("/api/exams")).exams;
+      examSelect.replaceChildren(...exams.map((exam) => h("option", {
+        value: exam.examID,
+        text: `${exam.subjectName} · ${exam.moduleName} (${exam.questionCount} ${exam.questionCount === 1 ? "question" : "questions"})`,
+      })));
+      if (!exams.length) {
+        picker.hidden = true;
+        say(msg, "No exams have been published yet. Check back later.", "info");
+      }
+    } catch (err) {
+      picker.hidden = true;
+      say(msg, err.message, "error");
+    }
+  })();
+
+  pickerForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const examID = examSelect.value;
+    const btn = $("#open-exam");
+    busy(btn, true, "Loading exam…");
+    try {
+      questions = (await api(`/api/questions?exam_id=${encodeURIComponent(examID)}`)).questions;
+      activeExam = exams.find((exam) => exam.examID === examID);
+      if (!questions.length || !activeExam) {
+        say(msg, "This exam has no available questions. Ask your teacher to check it.", "error");
+        return;
+      }
+      renderQuestions();
+      picker.hidden = true;
+      form.hidden = false;
+      chooseExam.hidden = false;
+      $("#title").textContent = `${activeExam.subjectName} · ${activeExam.moduleName}`;
+      summary.textContent = `${questions.length} ${questions.length === 1 ? "question" : "questions"} · ${fmt(activeExam.totalMarks)} marks`;
+      say(msg, "");
+    } catch (err) {
+      say(msg, err.message, "error");
+    } finally {
+      busy(btn, false);
+    }
+  });
+
+  function renderQuestions() {
     box.replaceChildren();
-    if (!questions.length) { say(msg, "No questions have been published yet. Check back later.", "info"); return; }
-    const total = questions.reduce((a, q) => a + q.totalMarks, 0);
-    summary.textContent = `${questions.length} ${questions.length === 1 ? "question" : "questions"} · ${fmt(total)} marks`;
     questions.forEach((q, i) => {
       const area = h("textarea", { id: "q" + i, maxlength: 4000, "aria-describedby": "c" + i });
       const count = h("div", { class: "count", id: "c" + i, text: "0 / 4000" });
       area.addEventListener("input", () => { count.textContent = `${area.value.length} / 4000`; });
       box.append(h("section", { class: "card" },
-        h("div", { class: "qhead" }, h("span", { class: "qno", text: "Question " + (i + 1) }), h("span", { class: "pill", text: fmt(q.totalMarks) + (q.totalMarks === 1 ? " mark" : " marks") })),
-        h("label", { for: "q" + i, class: "qtext", text: q.questionText }), area, count));
+        h("div", { class: "qhead" },
+          h("span", { class: "qno", text: "Question " + (i + 1) }),
+          h("span", { class: "pill", text: fmt(q.totalMarks) + (q.totalMarks === 1 ? " mark" : " marks") })),
+        h("label", { for: "q" + i, class: "qtext", text: q.questionText }),
+        area, count));
     });
     $("#actions").hidden = false;
-  })();
+  }
+
+  chooseExam.addEventListener("click", () => {
+    activeExam = null;
+    questions = [];
+    form.reset();
+    form.hidden = true;
+    chooseExam.hidden = true;
+    $("#actions").hidden = true;
+    box.replaceChildren();
+    picker.hidden = false;
+    $("#title").textContent = "Exam";
+    summary.textContent = "";
+    say(msg, "");
+  });
 
   form.addEventListener("submit", (e) => {
     e.preventDefault();
@@ -35,17 +90,20 @@ if (s) {
   });
 
   dlg.addEventListener("close", async () => {
-    if (dlg.returnValue !== "yes") return;
+    if (dlg.returnValue !== "yes" || !activeExam) return;
     const btn = $("#submit"), fields = [...form.querySelectorAll("textarea")];
     fields.forEach((f) => (f.disabled = true));
+    chooseExam.disabled = true;
     busy(btn, true, "Scoring your answers…");
     msg.className = "msg"; msg.textContent = "";
     try {
       const r = await api("/api/submit", { method: "POST",
-        body: { answers: questions.map((q, i) => ({ questionID: q.questionID, answer: $("#q" + i).value })) } });
+        body: { examID: activeExam.examID,
+          answers: questions.map((q, i) => ({ questionID: q.questionID, answer: $("#q" + i).value })) } });
       show(r);
     } catch (err) {
       fields.forEach((f) => (f.disabled = false));
+      chooseExam.disabled = false;
       busy(btn, false);
       say(msg, err.message, "error");
     }
@@ -53,7 +111,7 @@ if (s) {
 
   function show(r) {
     const pct = r.max ? Math.round((r.total / r.max) * 100) : 0;
-    form.hidden = true; summary.hidden = true;
+    form.hidden = true; summary.hidden = true; chooseExam.hidden = true;
     $("#title").textContent = "Your results";
     $("#results").replaceChildren(
       h("div", { class: "card" },

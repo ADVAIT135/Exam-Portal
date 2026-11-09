@@ -18,33 +18,20 @@ frontend/     the pages (upload these to a Static Space), plus netlify.toml if y
 
 ## Setup (about 20 minutes)
 
-### 1. Apps Script (new deployment)
-Deploy a **new** web app version of your script and use its new URL. The old URL is in your public Git history.
-To restrict it to your API, set a Script Property `API_SECRET` and add this at the top of `doPost`:
-
-```js
-function doPost(e) {
-  var data = JSON.parse(e.postData.contents);
-  var secret = PropertiesService.getScriptProperties().getProperty('API_SECRET');
-
-  if (secret && data.secret !== secret) {
-    return ContentService.createTextOutput(
-      JSON.stringify({status: 'error', message: 'Unauthorized'})
-    ).setMimeType(ContentService.MimeType.JSON);
-  }
-
-  // Keep your existing endpoint handling here...
-}
-```
-Also make sure `studentLogin` rejects unregistered emails and `teacherLogin` checks the password.
+### 1. Google Sheets and Apps Script
+1. Open the spreadsheet and choose **Extensions > Apps Script**. Replace all of `Code.gs` with [`backend/Code.gs`](backend/Code.gs), then save.
+2. In Apps Script **Project Settings > Script Properties**, add `API_SECRET`. Set it to the same secret you will put in Render as `APPS_SCRIPT_SECRET`.
+3. Run `setTeacherPassword` from the Apps Script function menu and follow the prompts. Add student emails below the `email` header in the `Students` sheet. The script creates the required tabs and headers on first use.
+4. Choose **Deploy > New deployment > Web app**. Set **Execute as** to you and access to **Anyone**, then deploy and authorize. Copy the **Web app URL** (ending in `/exec`).
+5. After changing `Code.gs`, deploy a **new version** of the web app so the API uses the updated handlers.
 
 ### 2. API on Render (free)
 1. Push this folder to a GitHub repo.
 2. Render: **New > Blueprint**, choose the repo (it reads `render.yaml`). Or **New > Web Service**, runtime
    **Docker**, root directory `backend`, instance type **Free**.
 3. Set environment variables:
-   - `APPS_SCRIPT_URL`: the new Apps Script URL
-   - `APPS_SCRIPT_SECRET`: the same value as `API_SECRET` (optional but recommended)
+   - `APPS_SCRIPT_URL`: the Apps Script Web app URL ending in `/exec`
+   - `APPS_SCRIPT_SECRET`: the same value as the Apps Script `API_SECRET` property
    - `ALLOWED_ORIGINS`: your pages' address, filled in at step 3 (no trailing slash)
    - `SECRET_KEY`: generated for you by the blueprint
 4. When it's live, open `https://YOUR-SERVICE.onrender.com/api/health`. You should see `"ok": true`.
@@ -53,8 +40,8 @@ Also make sure `studentLogin` rejects unregistered emails and `teacherLogin` che
 1. Hugging Face: **New Space**, SDK **Static**.
 2. Upload the contents of `frontend/` (including its `README.md`).
 3. Edit `js/config.js`: set `API_BASE` to your Render address, for example `https://exam-portal-api.onrender.com`.
-4. Open the Space's **Embed this Space** dialog, copy the **direct URL** (the `…hf.space` address), and put that
-   origin into `ALLOWED_ORIGINS` on Render. Share that direct URL with students.
+4. Set Render's `ALLOWED_ORIGINS` to the exact origin of the page running the embedded app (for example
+   `https://YOUR-SPACE.static.hf.space`), with no trailing slash. Share the Space's direct URL with students.
 
 Prefer Netlify? Drop `frontend/` on Netlify instead (`netlify.toml` is included) and use your Netlify address
 in `ALLOWED_ORIGINS`.
@@ -90,9 +77,14 @@ are cut off after a few hundred words.
 | `APPS_SCRIPT_URL` | required | Google Apps Script endpoint |
 | `SECRET_KEY` | random per start | Signs sessions; set it so logins survive restarts |
 | `ALLOWED_ORIGINS` | empty | Page origin(s) allowed to call the API, comma-separated |
-| `APPS_SCRIPT_SECRET` | empty | Sent to Apps Script with every call |
+| `APPS_SCRIPT_SECRET` | required | Sent to Apps Script with every call; must match `API_SECRET` |
 | `TOKEN_TTL_SECONDS` | 14400 | Session length |
 | `SIM_LOW` / `SIM_HIGH` | 0.25 / 0.80 | Scoring ramp |
 
-Each login can submit once, tracked in memory, so a server restart clears it. Block repeat submissions in your
-sheet if retakes matter.
+Each login can submit once per exam, tracked in memory, so a server restart clears that temporary restriction.
+Submission records and teacher reports are stored in Google Sheets. Existing ungrouped questions are imported into
+a `General · Imported questions` exam; older responses without submission IDs are not included in the new reports.
+
+Teachers can create separate exams by subject and module, then open **Results** to view ranked student scores,
+submission timestamps, class averages, highest/lowest results, student answers, and per-question zero/partial/full
+mark counts.

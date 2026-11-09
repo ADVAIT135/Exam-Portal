@@ -43,8 +43,10 @@ if (s) {
     const btn = $("#save");
     busy(btn, true, "Saving…");
     try {
-      const r = await api("/api/questions", { method: "POST", body: { questions } });
-      say(msg, `Saved ${r.saved} ${r.saved === 1 ? "question" : "questions"}. Students can see them now.`, "ok");
+      const r = await api("/api/questions", { method: "POST", body: {
+        subjectName: $("#subject").value.trim(), moduleName: $("#module").value.trim(), questions } });
+      say(msg, `Created ${$("#subject").value.trim()} · ${$("#module").value.trim()} with ${r.saved} ${r.saved === 1 ? "question" : "questions"}.`, "ok");
+      form.reset();
       reset();
     } catch (err) { say(msg, err.message, "error"); }
     busy(btn, false);

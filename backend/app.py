@@ -138,19 +138,20 @@ def require(role):
 _used, _used_lock = {}, threading.Lock()
 
 
-def claim_submission(jti):
+def claim_submission(jti, exam_id):
+    key = f"{jti}:{exam_id}"
     with _used_lock:
         now = time.time()
         for k in [k for k, t in _used.items() if now - t > TOKEN_TTL]:
             del _used[k]
-        if jti in _used:
+        if key in _used:
             raise ApiError("You've already submitted this exam.", 409)
-        _used[jti] = now
+        _used[key] = now
 
 
-def release_submission(jti):
+def release_submission(jti, exam_id):
     with _used_lock:
-        _used.pop(jti, None)
+        _used.pop(f"{jti}:{exam_id}", None)
 
 
 # ---------------------------------------------------------------- scoring
@@ -248,7 +249,12 @@ def student_login():
 @app.post("/api/questions")
 def post_questions():
     require("teacher")
-    items = body().get("questions")
+    data = body()
+    subject = str(data.get("subjectName") or "").strip() or "General"
+    module = str(data.get("moduleName") or "").strip() or "Uncategorized"
+    items = data.get("questions")
+    if len(subject) > 120 or len(module) > 120:
+        raise ApiError("Subject and module names must be 120 characters or fewer.")
     if not isinstance(items, list) or not 1 <= len(items) <= MAX_QUESTIONS:
         raise ApiError(f"Add between 1 and {MAX_QUESTIONS} questions.")
     out = []
@@ -267,48 +273,199 @@ def post_questions():
         if not math.isfinite(marks) or marks <= 0 or marks > 1000:
             raise ApiError(f"Question {n} needs marks greater than 0.")
         out.append({"questionText": text, "desiredAnswer": ref, "totalMarks": marks})
-    call_sheets("postQuestions", teacherEmail=g.email, questions=out)
-    return jsonify({"status": "ok", "saved": len(out)})
+    result = call_sheets("postQuestions", teacherEmail=g.email, subjectName=subject,
+                         moduleName=module, questions=out)
+    exam_id = str(result.get("examID") or "")
+    if not exam_id:
+        raise ApiError("Apps Script did not return an exam ID. Deploy the updated Code.gs.", 502)
+    return jsonify({"status": "ok", "saved": len(out), "examID": exam_id})
 
 
-def _load_questions():
-    qs = call_sheets("getQuestions").get("questions") or []
+def _load_questions(exam_id):
+    qs = call_sheets("getQuestions", examID=exam_id).get("questions") or []
     return [q for q in qs if isinstance(q, dict) and q.get("questionID") is not None]
+
+
+@app.get("/api/exams")
+def get_exams():
+    require("student")
+    return jsonify({"exams": _list_exams()})
+
+
+def _list_exams(teacher_email=None):
+    fields = {"teacherEmail": teacher_email} if teacher_email else {}
+    exams = call_sheets("getExams", **fields).get("exams") or []
+    return [
+        {"examID": str(e.get("examID", "")), "subjectName": str(e.get("subjectName", "")),
+         "moduleName": str(e.get("moduleName", "")), "questionCount": int(e.get("questionCount") or 0),
+         "totalMarks": float(e.get("totalMarks") or 0), "createdAt": str(e.get("createdAt", ""))}
+        for e in exams if isinstance(e, dict) and e.get("examID")
+    ]
+
+
+@app.get("/api/teacher/exams")
+def teacher_exams():
+    require("teacher")
+    return jsonify({"exams": _list_exams(g.email)})
 
 
 @app.get("/api/questions")
 def get_questions():
     require("student")
+    exam_id = str(request.args.get("exam_id") or "").strip()
+    if not exam_id or len(exam_id) > 100:
+        raise ApiError("Choose a valid exam.")
+    questions = _load_questions(exam_id)
     # Reference answers never leave the server.
     return jsonify({"questions": [
         {"questionID": str(q["questionID"]), "questionText": str(q.get("questionText", "")),
-         "totalMarks": float(q.get("totalMarks") or 0)} for q in _load_questions()]})
+         "totalMarks": float(q.get("totalMarks") or 0)} for q in questions]})
 
 
 @app.post("/api/submit")
 def submit():
     require("student")
-    given = body().get("answers")
+    data = body()
+    exam_id = str(data.get("examID") or "").strip()
+    if not exam_id or len(exam_id) > 100:
+        raise ApiError("Choose a valid exam.")
+    given = data.get("answers")
     if not isinstance(given, list):
         raise ApiError("Send your answers as a list.")
     by_id = {str(a.get("questionID")): str(a.get("answer") or "")[:MAX_ANSWER_CHARS]
              for a in given if isinstance(a, dict)}
-    claim_submission(g.jti)  # one submission per login; also blocks concurrent double-submits
+    claim_submission(g.jti, exam_id)  # one submission per login and exam
+    submission_id = uuid.uuid4().hex
     try:
-        questions = _load_questions()
+        questions = _load_questions(exam_id)
         if not questions:
             raise ApiError("There are no questions to answer yet.", 404)
         rows = [(q, by_id.get(str(q["questionID"]), "").strip()) for q in questions]
         scores = score_answers([(str(q.get("desiredAnswer", "")), a, float(q.get("totalMarks") or 0)) for q, a in rows])
-        call_sheets("submitResponses", studentEmail=g.email, responses=[
-            {"questionID": str(q["questionID"]), "studentAnswer": a, "score": s} for (q, a), s in zip(rows, scores)])
+        call_sheets("submitResponses", studentEmail=g.email, examID=exam_id, submissionID=submission_id,
+                    responses=[
+                        {"questionID": str(q["questionID"]), "studentAnswer": a, "score": s,
+                         "totalMarks": float(q.get("totalMarks") or 0)}
+                        for (q, a), s in zip(rows, scores)])
     except Exception:
-        release_submission(g.jti)
+        release_submission(g.jti, exam_id)
         raise
     results = [{"questionID": str(q["questionID"]), "questionText": str(q.get("questionText", "")), "answer": a,
                 "score": s, "totalMarks": float(q.get("totalMarks") or 0)} for (q, a), s in zip(rows, scores)]
-    return jsonify({"status": "ok", "results": results, "total": round(sum(scores), 2),
+    return jsonify({"status": "ok", "submissionID": submission_id, "results": results,
+                    "total": round(sum(scores), 2),
                     "max": round(sum(r["totalMarks"] for r in results), 2)})
+
+
+@app.get("/api/teacher/reports")
+def teacher_reports():
+    require("teacher")
+    exam_id = str(request.args.get("exam_id") or "").strip()
+    if not exam_id or len(exam_id) > 100:
+        raise ApiError("Choose a valid exam.")
+    data = call_sheets("getResults", examID=exam_id, teacherEmail=g.email)
+    exam = data.get("exam") or {}
+    submissions = data.get("submissions") or []
+    source_questions = data.get("questions") or []
+    if not isinstance(exam, dict) or not isinstance(submissions, list) or not isinstance(source_questions, list):
+        raise ApiError("The report data from Google Sheets is invalid.", 502)
+
+    reports = []
+    question_data = {}
+    for question in source_questions:
+        if not isinstance(question, dict):
+            continue
+        question_id = str(question.get("questionID", ""))
+        try:
+            marks = float(question.get("totalMarks") or 0)
+        except (TypeError, ValueError):
+            continue
+        if question_id and math.isfinite(marks) and marks >= 0:
+            question_data[question_id] = {
+                "questionText": str(question.get("questionText", "")),
+                "totalMarks": marks,
+                "scoreTotal": 0.0,
+                "count": 0,
+                "zero": 0,
+                "partial": 0,
+                "full": 0,
+            }
+    for submission in submissions:
+        if not isinstance(submission, dict) or not isinstance(submission.get("answers"), list):
+            continue
+        answers = []
+        total = maximum = 0.0
+        for answer in submission["answers"]:
+            if not isinstance(answer, dict):
+                continue
+            try:
+                score = float(answer.get("score") or 0)
+                marks = float(answer.get("totalMarks") or 0)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(score) or not math.isfinite(marks) or marks < 0:
+                continue
+            score = min(max(score, 0), marks)
+            question_id = str(answer.get("questionID", ""))
+            total += score
+            maximum += marks
+            answers.append({
+                "questionID": question_id,
+                "questionText": str(answer.get("questionText", "")),
+                "answer": str(answer.get("answer", "")),
+                "score": score,
+                "totalMarks": marks,
+            })
+            stats = question_data.setdefault(question_id, {
+                "questionText": str(answer.get("questionText", "")),
+                "totalMarks": marks,
+                "scoreTotal": 0.0,
+                "count": 0,
+                "zero": 0,
+                "partial": 0,
+                "full": 0,
+            })
+            stats["scoreTotal"] += score
+            stats["count"] += 1
+            if score <= 0:
+                stats["zero"] += 1
+            elif score >= marks:
+                stats["full"] += 1
+            else:
+                stats["partial"] += 1
+        reports.append({
+            "submissionID": str(submission.get("submissionID", "")),
+            "studentEmail": str(submission.get("studentEmail", "")),
+            "submittedAt": str(submission.get("submittedAt", "")),
+            "total": round(total, 2),
+            "max": round(maximum, 2),
+            "percent": round((total / maximum * 100) if maximum else 0, 1),
+            "answers": answers,
+        })
+
+    reports.sort(key=lambda item: (-item["percent"], item["submittedAt"]))
+    for rank, report in enumerate(reports, 1):
+        report["rank"] = rank
+    for stats in question_data.values():
+        stats["average"] = round(stats["scoreTotal"] / stats["count"], 2) if stats["count"] else 0
+        del stats["scoreTotal"]
+
+    percentages = [r["percent"] for r in reports]
+    return jsonify({
+        "exam": {
+            "examID": str(exam.get("examID", exam_id)),
+            "subjectName": str(exam.get("subjectName", "")),
+            "moduleName": str(exam.get("moduleName", "")),
+        },
+        "summary": {
+            "submissionCount": len(reports),
+            "averagePercent": round(sum(percentages) / len(percentages), 1) if percentages else 0,
+            "highestPercent": max(percentages) if percentages else None,
+            "lowestPercent": min(percentages) if percentages else None,
+        },
+        "submissions": reports,
+        "questions": list(question_data.values()),
+    })
 
 
 if __name__ == "__main__":

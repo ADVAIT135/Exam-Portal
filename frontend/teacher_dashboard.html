@@ -9,10 +9,21 @@
 <body>
 <header class="bar" id="bar"><a class="brand" href="index.html">Exam Portal</a></header>
 <main>
-<h1>Create questions</h1>
+<h1>Create exam</h1>
+<p class="muted">Each saved subject and module becomes a separate exam students can choose.</p>
 <p class="muted" id="tally" aria-live="polite"></p>
 <div id="msg" class="msg" role="status" aria-live="polite"></div>
 <form id="form">
+  <section class="card">
+    <div class="field">
+      <label for="subject">Subject</label>
+      <input id="subject" maxlength="120" required placeholder="e.g. Science">
+    </div>
+    <div class="field" style="margin-bottom:0">
+      <label for="module">Module name</label>
+      <input id="module" maxlength="120" required placeholder="e.g. Plant systems">
+    </div>
+  </section>
   <div id="list"></div>
   <div class="row">
     <button class="btn" id="add" type="button">Add another question</button>

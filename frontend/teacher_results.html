@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Exam results · Exam Portal</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+<header class="bar" id="bar"><a class="brand" href="index.html">Exam Portal</a></header>
+<main>
+<h1>Exam results</h1>
+<p class="muted">Review score rankings, submission times, and question-level performance.</p>
+<div id="msg" class="msg" role="status" aria-live="polite"></div>
+<form class="card" id="report-form">
+  <div class="field">
+    <label for="exam-select">Subject and module</label>
+    <select id="exam-select" required></select>
+  </div>
+  <button class="btn primary" id="load-report" type="submit">Load results</button>
+</form>
+<div id="report" hidden>
+  <h2 id="report-title"></h2>
+  <div class="stats" id="summary"></div>
+  <section class="card">
+    <h2>Student ranking</h2>
+    <p class="muted">Ranked by percentage; ties are ordered by submission time.</p>
+    <div class="tw" id="submissions"></div>
+  </section>
+  <section class="card">
+    <h2>Question analysis</h2>
+    <p class="muted">Average marks and how many submissions scored zero, partial, or full marks.</p>
+    <div class="tw" id="questions"></div>
+  </section>
+</div>
+</main>
+<script type="module" src="js/results.js"></script>
+</body>
+</html>
